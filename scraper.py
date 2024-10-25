@@ -5,27 +5,42 @@ import threading
 import json
 import os
 import csv
+import logging
+from constants import DEFAULT_BLACKLIST
 
 class Scraper:
     def __init__(self):
         self.stop_flag = threading.Event()
+        self.settings = {}
+        self.adv_settings = {}
 
-    def start_scraping(self, url, mode, product_identifier, prod_els, log_queue):
+    def start_scraping(self):
         self.stop_flag.clear()
 
-        # Perform scraping in a background thread
-        scraping_thread = threading.Thread(target=self.scrape_task, args=(url, mode, product_identifier, prod_els, log_queue))
-        scraping_thread.start()
+        # reformat any settings to be used
+        self.adv_settings["formatted_blacklist"] = self.str_to_array_by_linebrake(self.adv_settings["blacklist"])
+
+        # Perform the scraping task using the extracted settings
+        self.scrape_task()
 
     def stop_scraping(self):
         self.stop_flag.set()
 
-    def scrape_task(self, start_url, mode, product_identifier, prod_els, log_queue):
+    def scrape_task(self):
+
+        # Extract settings for the scrape task
+        start_url = self.settings.get("url")
+        mode = self.settings.get("mode")
+        product_identifier = self.settings.get("product_identifier")
+        prod_els = self.settings.get("prod_els")
+        log_queue = self.settings.get("log_queue")
+
         if not self.is_valid_url(start_url):
             log_queue.put("Invalid URL. Please provide a valid URL.")
             return
         
-        log_queue.put(f"Starting scraping ...")
+        log_queue.put("Starting scraping ...")
+        logging.info("Starting scraping...")
 
         domain = urlparse(start_url).netloc
         visited = set()
@@ -46,45 +61,55 @@ class Scraper:
                 if current_url in visited:
                     continue
 
-                # log_queue.put(f"Crawling: {current_url}")
+                logging.info(f"Crawling: {current_url}")
                 visited.add(current_url)
+
+                # actually visit the site
+                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"}
+
+                try:
+                    response = requests.get(current_url, headers=headers, timeout=10)
+                    soup = BeautifulSoup(response.text, 'html.parser')
+
+                    if response.status_code == 403:
+                        logging.error("The websites forbids the access: 403 error. See extract_product_info function.")
+                        log_queue.put("The websites forbids the access: 403 error. See extract_product_info function.")
+                        return None
+                
+                except Exception as e:
+                    logging.error(f"Error while scraping {current_url}: {e}")
+                    log_queue.put(f"Error while scraping {current_url}: {e}")
+                    return None
 
                 # Get product info from the current page
                 try:
                     if product_identifier in current_url:
-                        product_info = self.extract_product_info(current_url, mode, prod_els, log_queue)
+                        product_info = self.extract_product_info(current_url, mode, prod_els, log_queue, soup)
                         if product_info:
                             writer.writerow(product_info)
                             product_qty += 1
 
                 except Exception as e:
+                    logging.error(f"Error while processing {current_url}: {e}")
                     log_queue.put(f"Error while processing {current_url}: {e}")
+                    return None
 
                 # Find more links to visit
                 try:
-                    new_links = self.get_all_links(current_url, domain, log_queue)
+                    new_links = self.get_all_links(current_url, domain, log_queue, soup)
                     to_visit.update(new_links - visited)
                     log_queue.put(f"Visited: {len(visited)} | Queuing: {len(to_visit)} | product{"" if product_qty == 1 else "s"}: {product_qty}.")
 
                 except Exception as e:
-                    self.log_queue.put(f"Error extracting links from {current_url}: {e}")
+                    logging.error(f"Error extracting links from {current_url}: {e}")
+                    log_queue.put(f"Error extracting links from {current_url}: {e}")
 
+            logging.info(f"Scraping job finished.")
             log_queue.put(f"Scraping job finished.")
             self.stop_scraping()
 
-    def extract_product_info(self, url, mode, prod_els, log_queue):
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
-        }
-
+    def extract_product_info(self, url, mode, prod_els, log_queue, soup):
         try:
-            response = requests.get(url, headers=headers, timeout=10)
-            soup = BeautifulSoup(response.text, 'html.parser')
-
-            if response.status_code == 403:
-                log_queue.put("The websites forbids the access: 403 error. See extract_product_info function.")
-                return None
-
             product_info = {}
 
             # Handle different modes: JSON-LD or HTML
@@ -107,6 +132,7 @@ class Scraper:
                             return product_info
                         
                     except json.JSONDecodeError as e:
+                        logging.error(f"Error parsing JSON from {url}: {e}")
                         log_queue.put(f"Error parsing JSON from {url}: {e}")
 
             elif mode == "html":
@@ -121,6 +147,7 @@ class Scraper:
                 return product_info if any(product_info.values()) else None
 
         except Exception as e:
+            logging.error(f"Error while scraping {url}: {e}")
             log_queue.put(f"Error while scraping {url}: {e}")
             return None
 
@@ -132,6 +159,7 @@ class Scraper:
             tag = soup.find(attrs={"itemprop": itemprop_name})
 
         if not tag:
+            logging.error(f"{itemprop_name} not found using {'class' if class_name else 'itemprop'}.")
             log_queue.put(f"{itemprop_name} not found using {'class' if class_name else 'itemprop'}.")
             return f"No {itemprop_name} found."
 
@@ -139,11 +167,12 @@ class Scraper:
         # handle special case for image
         if itemprop_name == "image":
             if class_name:
-                image_tag = tag.find('image')
+                image_tag = tag.find("img")
                 if image_tag and "src" in image_tag.attrs:
-                    return image_tag["src"].get_text(strip=True)
+                    return image_tag["src"]
                 else:
                     error_msg = "No image found in parent element!"
+                    logging.error(error_msg)
                     log_queue.put(error_msg)
                     return error_msg
             else:
@@ -153,6 +182,7 @@ class Scraper:
                     return tag["src"]
                 else:
                     error_msg = "Image not found with itemprop."
+                    logging.error(error_msg)
                     log_queue.put(error_msg)
                     return error_msg
 
@@ -176,6 +206,7 @@ class Scraper:
                         return tag.get_text(strip=True).replace(".", ",")
                 else:
                     error_msg = "No itemprop offer found to get price from!"
+                    logging.error(error_msg)
                     log_queue.put(error_msg)
                     return error_msg
 
@@ -185,71 +216,51 @@ class Scraper:
         else:
             return tag.get_text(strip=True)        
 
-    def get_all_links(self, url, domain, log_queue):
+    def get_all_links(self, url, domain, log_queue, soup):
         links = set()
 
-        blacklist = [
-            "facebook.com",
-            "twitter.com",
-            "instagram.com",
-            "linkedin.com",
-            "youtube.com",
-            "pinterest.com",
-            "/account",
-            "/agbs",
-            "/agb",
-            "/cart",
-            "/impressum",
-            "/kontakt",
-            "/contact",
-            "/datenschutz",
-            "/über-uns",
-            "/ueber-uns",
-            "/de/de/",
-            "/en"
-        ]
-
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
-        }
+        parsed_url = urlparse(url)
+        base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
 
         try:
-            response = requests.get(url, headers=headers, timeout=10)
-            soup = BeautifulSoup(response.text, 'html.parser')
-            if response.status_code == 403:
-                log_queue.put("The websites forbids the access: 403 error. See get_all_links function.")
-                return links
-
             # First, get all <a> tags directly (as in original code)
             for a_tag in soup.find_all("a", href=True):
-                link = urljoin(url, a_tag['href'])
+                relative_link = a_tag['href']
+                full_link = urljoin(base_url, relative_link)
+                parsed_link = urlparse(full_link)
 
-                # Normalize the URL by removing the fragment part
-                parsed_link = urlparse(link)
                 normalized_link = urlunparse(parsed_link._replace(fragment=""))
 
-                if domain in normalized_link and not any(blacklisted_url in normalized_link for blacklisted_url in blacklist):
+                if domain in normalized_link and not any(blacklisted_url in normalized_link for blacklisted_url in self.adv_settings["formatted_blacklist"]):
                     links.add(normalized_link)
-                    # log_queue.put(f"Link found: {normalized_link}")
+                    logging.info(f"Link found: {normalized_link}")
             
             # Look deeper into nested divs or other elements if necessary
             for div in soup.find_all(['div', 'nav', 'ul', 'li', 'span']):
                 nested_a_tags = div.find_all("a", href=True)
                 for nested_a_tag in nested_a_tags:
-                    link = urljoin(url, nested_a_tag['href'])
 
-                    # Normalize the nested link as well
-                    parsed_link = urlparse(link)
+                    relative_link = nested_a_tag['href']
+                    full_link = urljoin(base_url, relative_link)
+                    parsed_link = urlparse(full_link)
+
                     normalized_link = urlunparse(parsed_link._replace(fragment=""))
                     
-                    if domain in normalized_link and not any(blacklisted_url in normalized_link for blacklisted_url in blacklist):
+                    if domain in normalized_link and not any(blacklisted_url in normalized_link for blacklisted_url in self.adv_settings["formatted_blacklist"]):
                         links.add(normalized_link)
-                        # log_queue.put(f"Nested link found: {normalized_link}")
+                        logging.info(f"Nested link found: {normalized_link}")
+                        if len(normalized_link) > 200: # for testing only
+                            print(f"{url} Nested link found: {normalized_link}")
 
         except Exception as e:
+            logging.error(f"Error while fetching links from {url}: {e}")
             log_queue.put(f"Error while fetching links from {url}: {e}")
         return links
 
     def is_valid_url(self, url):
         parsed = urlparse(url)
         return bool(parsed.scheme) and bool(parsed.netloc)
+    
+    def str_to_array_by_linebrake(self, str):
+        array = [line.strip() for line in str.splitlines() if line.strip()]
+        return array
