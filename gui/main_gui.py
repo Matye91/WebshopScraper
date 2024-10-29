@@ -48,7 +48,7 @@ class ScraperApp:
         self.json_button = tk.Checkbutton(root, text="JSON-LD Mode", variable=self.mode_json, command=self.set_json_mode)
         self.json_button.grid(row=2, column=1, padx=0, pady=10)
 
-        self.adv_setting_btn = tk.Button(root, text="advanced settings", command=self.show_adv_settings)
+        self.adv_setting_btn = tk.Button(root, text="Advanced Settings", command=self.show_adv_settings)
         self.adv_setting_btn.grid(row=2, column=2, padx=0, pady=10)
 
         # Product Field Container Frame
@@ -212,13 +212,6 @@ class ScraperApp:
         self.adv_window.destroy()
         self.adv_window = None
 
-    def on_closing(self):
-        """Handle the window close event."""
-        if self.scraping_thread and self.scraping_thread.is_alive() and messagebox.askokcancel("Quit", "Do you want to quit? Any running scraping task will be cancelled."):
-            # Stop scraping if running
-            self.stop_scraping()
-        self.root.destroy()
-
     def setup_logger(self):
         """Set up thread-safe logging using QueueHandler and QueueListener."""
         self.log_queue = queue.Queue()
@@ -238,9 +231,8 @@ class ScraperApp:
         listener = QueueListener(self.log_queue, file_handler)
         listener.start()
 
-    # Example of how to log a message
     def log(self, message, level=logging.INFO):
-        """Log messages to the GUI and the log file."""
+        """Log messages to the log file."""
         self.log_output.config(state=tk.NORMAL)
         self.log_output.insert(tk.END, message + "\n")
         self.log_output.yview(tk.END)
@@ -248,3 +240,10 @@ class ScraperApp:
 
         # Logging to the file through the queue
         logging.log(level, message)
+
+    def on_closing(self):
+        """Handle the window close event."""
+        if self.scraping_thread and self.scraping_thread.is_alive() and messagebox.askokcancel("Quit", "Do you want to quit? Any running scraping task will be cancelled."):
+            # Stop scraping if running
+            self.stop_scraping()
+        self.root.destroy()

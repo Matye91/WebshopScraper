@@ -163,7 +163,6 @@ class Scraper:
             log_queue.put(f"{itemprop_name} not found using {'class' if class_name else 'itemprop'}.")
             return f"No {itemprop_name} found."
 
-
         # handle special case for image
         if itemprop_name == "image":
             if class_name:
@@ -253,8 +252,6 @@ class Scraper:
                     if domain in normalized_link and not any(blacklisted_url in normalized_link for blacklisted_url in self.adv_settings["formatted_blacklist"]):
                         links.add(normalized_link)
                         logging.info(f"Nested link found: {normalized_link}")
-                        if len(normalized_link) > 200: # for testing only
-                            print(f"{url} Nested link found: {normalized_link}")
 
         except Exception as e:
             logging.error(f"Error while fetching links from {url}: {e}")
