@@ -6,7 +6,7 @@ import json
 import os
 import csv
 import logging
-from constants import DEFAULT_BLACKLIST
+from constants import GENERAL_BLACKLIST
 
 class Scraper:
     def __init__(self):
@@ -231,7 +231,11 @@ class Scraper:
 
                 normalized_link = urlunparse(parsed_link._replace(fragment=""))
 
-                if domain in normalized_link and not any(blacklisted_url in normalized_link for blacklisted_url in self.adv_settings["formatted_blacklist"]):
+                if (
+                    domain in normalized_link 
+                    and not any(blacklisted_url in normalized_link for blacklisted_url in self.adv_settings["formatted_blacklist"]) 
+                    and not any(general_url in normalized_link for general_url in GENERAL_BLACKLIST)
+                ):
                     links.add(normalized_link)
                     logging.info(f"Link found: {normalized_link}")
             

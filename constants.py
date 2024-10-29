@@ -1,11 +1,15 @@
-# Default blacklist components
-DEFAULT_BLACKLIST = """facebook.com
+# General blacklist components
+GENERAL_BLACKLIST = """facebook.com
 twitter.com
 instagram.com
 linkedin.com
 youtube.com
 pinterest.com
-/account
+mailto
+tel"""
+
+# Default blacklist components
+DEFAULT_BLACKLIST = """/account
 /agbs
 /agb
 /cart
