@@ -7,6 +7,7 @@ import threading
 import logging
 import os
 from logging.handlers import QueueHandler, QueueListener
+import asyncio
 
 class ScraperApp:
     def __init__(self, root):
@@ -152,8 +153,19 @@ class ScraperApp:
         # Pass advanced settings as well
         self.scraper.adv_settings = self.adv_settings
 
-        # Hand off and start Scraper class
-        self.scraping_thread = threading.Thread(target=self.scraper.start_scraping)
+        # Define an async wrapper to run the scraper in the asyncio event loop
+        async def run_scraper():
+            await self.scraper.start_scraping()
+
+        # Start the scraper in a separate thread with asyncio.run
+        def thread_target():
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
+            self.loop.run_until_complete(run_scraper())
+            self.loop.close()  # Close the loop when scraping stops
+
+        # Start the thread
+        self.scraping_thread = threading.Thread(target=thread_target)
         self.scraping_thread.start()
 
         # Disable start and enable stop buttons
@@ -162,16 +174,16 @@ class ScraperApp:
 
     def stop_scraping(self):
         # Signal the scraper to stop
-        self.stop_flag.set()
+        self.scraper.stop_flag.set()
 
         self.stop_button.config(state=tk.DISABLED)
         self.start_button.config(state=tk.NORMAL)
 
         self.log_queue.put("Scraping stopped.")
 
+        # Ensure thread and event loop are properly stopped
         if self.scraping_thread:
-
-            self.scraper.stop_scraping()
+            self.scraping_thread.join()  # Wait for the thread to finish
         
     def process_log_queue(self):
         # Process messages from the queue and add them to the buffer

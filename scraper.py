@@ -1,4 +1,3 @@
-import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, urljoin, urlunparse
 import threading
@@ -6,64 +5,114 @@ import json
 import os
 import csv
 import logging
-from constants import GENERAL_BLACKLIST
-from threading import Timer # for speed testing only (delete later)
-from datetime import datetime # for speed testing only (delete later)
-import psutil # for speed testing only (delete later)
-import time # for speed testing only (delete later)
+import asyncio
+import aiohttp
+from constants import GENERAL_BLACKLIST, SIMULTANEOUS_SCRAPS, RESPONSE_TIMEOUT, RESPONSE_RETRY, SPEED_TEST_MODE, SPEED_TEST_DURATION, EXCLUDED_EXTENSIONS
+from threading import Timer
+from datetime import datetime
+import psutil
+import time
 
 class Scraper:
     def __init__(self):
-        self.stop_flag = threading.Event()
+        self.stop_flag = asyncio.Event()
         self.settings = {}
         self.adv_settings = {}
+        self.product_qty = 0
 
-        # for speed testing only (delete later)
-        self.average_cpu_usage = 0
-        self.max_memory_usage = 0
+        if SPEED_TEST_MODE:
+            self.average_cpu_usage = 0
+            self.max_memory_usage = 0
 
-    def start_scraping(self):
+    async def fetch(self, session, url, headers, log_queue, retries=RESPONSE_RETRY, initial_timeout=RESPONSE_TIMEOUT):
+        """ Asynchronous HTTP GET request with retries and exponential backoff for timeouts """
+        for attempt in range(1, retries + 1):
+            try:
+                async with session.get(url, headers=headers, timeout=initial_timeout) as response:
+                    if response.status == 403:
+                        log_queue.put(f"Access denied: 403 Forbidden for {url}")
+                        logging.error(f"Access denied: 403 Forbidden for {url}")
+                        return None
+                    elif response.status != 200:
+                        log_queue.put(f"Non-200 status code {response.status} ({response.reason}) for {url}")
+                        logging.error(f"Non-200 status code {response.status} ({response.reason}) for {url}")
+                        return None
+                    return await response.text()
+            
+            except asyncio.TimeoutError:
+                log_queue.put(f"Timeout error for {url} on attempt {attempt}/{retries}")
+                logging.error(f"Timeout error for {url} on attempt {attempt}/{retries}")
+                if attempt < retries:
+                    # Wait before retrying, with exponential backoff
+                    backoff_time = 2 ** (attempt - 1)
+                    await asyncio.sleep(backoff_time)
+                else:
+                    log_queue.put(f"Failed to fetch {url} after {retries} attempts due to timeout.")
+                    logging.error(f"Failed to fetch {url} after {retries} attempts due to timeout.")
+                    return None
+
+            except aiohttp.ClientConnectionError as e:
+                log_queue.put(f"Connection error for {url}: {e}")
+                logging.error(f"Connection error for {url}: {e}")
+                return None
+
+            except Exception as e:
+                log_queue.put(f"Unexpected error fetching {url}: {e.__class__.__name__} - {e}")
+                logging.error(f"Unexpected error fetching {url}: {e.__class__.__name__} - {e}")
+                return None
+
+    async def start_scraping(self):
         self.stop_flag.clear()
 
-        # for speed testing only (delete later)
-        now = datetime.now()
-        current_time = now.strftime("%H:%M:%S")
-        print(f"{current_time}: Timer started")
-        t = Timer(300.0, self.stop_flag.set)
-        t.start()
-        monitoring_thread = threading.Thread(target=self.monitor)
-        monitoring_thread.daemon = True
-        monitoring_thread.start()
+        log_queue = self.settings.get("log_queue")
+
+        # Prepare the CSV file path
+        desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
+        csv_file_path = os.path.join(desktop_path, "scraped_products.csv")
+
+        if SPEED_TEST_MODE:
+            now = datetime.now()
+            current_time = now.strftime("%H:%M:%S")
+            print(f"{current_time}: Timer started")
+            t = Timer(SPEED_TEST_DURATION, self.stop_flag.set)
+            t.start()
+            monitoring_thread = threading.Thread(target=self.monitor)
+            monitoring_thread.daemon = True
+            monitoring_thread.start()
 
         # reformat any settings to be used
         self.adv_settings["formatted_blacklist"] = self.str_to_array_by_linebrake(self.adv_settings["blacklist"])
 
-        # Perform the scraping task using the extracted settings
-        self.scrape_task()
+        # Open session for aiohttp and initiate the scraping process
+        async with aiohttp.ClientSession() as session:
+            with open(csv_file_path, mode='w', newline='', encoding='utf-8') as file:
+                writer = csv.DictWriter(file, fieldnames=['name', 'image', 'desc', 'sku', 'price', 'url'])
+                writer.writeheader()
+
+                await self.scrape_task(session, writer, log_queue)
 
     def stop_scraping(self):
-        # for speed testing only (delete later)
-        now = datetime.now()
-        current_time = now.strftime("%H:%M:%S")
-        print(f"{current_time}: Timer stopped")
-        time.sleep(0.5)
-        
-        # Print the max CPU and memory usage
-        self.average_cpu_usage = round(self.average_cpu_usage, 1)
-        self.max_memory_usage = round(self.max_memory_usage, 0)
-        print(f"Average CPU Usage: {self.average_cpu_usage}%")
-        print(f"Max Memory Usage: {self.max_memory_usage} MB")
+        if SPEED_TEST_MODE:
+            now = datetime.now()
+            current_time = now.strftime("%H:%M:%S")
+            print(f"{current_time}: Timer stopped")
+            time.sleep(0.5)
+
+            # Print the max CPU and memory usage
+            self.average_cpu_usage = round(self.average_cpu_usage, 1)
+            self.max_memory_usage = round(self.max_memory_usage, 0)
+            print(f"Average CPU Usage: {self.average_cpu_usage}%")
+            print(f"Max Memory Usage: {self.max_memory_usage} MB")
 
         self.stop_flag.set()
 
-    def scrape_task(self):
-
-        # Extract settings for the scrape task
+    async def scrape_task(self, session, writer, log_queue):
+        """ Main asynchronous scraping task """
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"}
         start_url = self.settings.get("url")
         mode = self.settings.get("mode")
         product_identifier = self.settings.get("product_identifier")
         prod_els = self.settings.get("prod_els")
-        log_queue = self.settings.get("log_queue")
 
         if not self.is_valid_url(start_url):
             log_queue.put("Invalid URL. Please provide a valid URL.")
@@ -72,71 +121,55 @@ class Scraper:
         log_queue.put("Starting scraping ...")
         logging.info("Starting scraping...")
 
-        domain = urlparse(start_url).netloc
-        visited = set()
+        # domain = urlparse(start_url).netloc where does this go?
         to_visit = {start_url}
-        product_qty = 0
+        visited = set()
+        tasks = []
 
-        # Prepare the CSV file on the user's desktop
-        desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-        csv_file_path = os.path.join(desktop_path, "scraped_products.csv")
+        while to_visit or tasks:
+            # If stop_flag is set, break out of the loop
+            if self.stop_flag.is_set():
+                break
 
-        with open(csv_file_path, mode='w', newline='', encoding='utf-8') as file:
-            writer = csv.DictWriter(file, fieldnames=['name', 'image', 'desc', 'sku', 'price', 'url'])
-            writer.writeheader()
-
-            while to_visit and not self.stop_flag.is_set():
+            if to_visit:
                 current_url = to_visit.pop()
+                if current_url not in visited:
+                    # logging.info(f"Crawling: {current_url}")
+                    visited.add(current_url)
+                    task = self.process_url(session, current_url, headers, visited, to_visit, product_identifier, mode, prod_els, writer, log_queue)
+                    tasks.append(task)
 
-                if current_url in visited:
-                    continue
+            # Limit the number of concurrent tasks
+            if len(tasks) >= SIMULTANEOUS_SCRAPS or not to_visit:
+                await asyncio.gather(*tasks)
+                tasks = []  # Reset task list after processing
 
-                logging.info(f"Crawling: {current_url}")
-                visited.add(current_url)
+        logging.info(f"Scraping job finished.")
+        log_queue.put(f"Scraping job finished.")
+        self.stop_scraping()
 
-                # actually visit the site
-                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"}
+    async def process_url(self, session, url, headers, visited, to_visit, product_identifier, mode, prod_els, writer, log_queue):
+        """ Process a single URL asynchronously """
+        response_text = await self.fetch(session, url, headers, log_queue)
+        if response_text is None:
+            return
 
-                try:
-                    response = requests.get(current_url, headers=headers, timeout=10)
-                    soup = BeautifulSoup(response.text, 'html.parser')
+        soup = BeautifulSoup(response_text, 'html.parser')
 
-                    if response.status_code == 403:
-                        logging.error("The websites forbids the access: 403 error. See extract_product_info function.")
-                        log_queue.put("The websites forbids the access: 403 error. See extract_product_info function.")
-                        return None
-                
-                except Exception as e:
-                    logging.error(f"Error while scraping {current_url}: {e}")
-                    log_queue.put(f"Error while scraping {current_url}: {e}")
-                    return None
+        # If the URL contains the product identifier, extract product info
+        if product_identifier in url:
+            product_info = self.extract_product_info(url, mode, prod_els, log_queue, soup)
+            if product_info:
+                writer.writerow(product_info)
+                self.product_qty += 1
 
-                # Get product info from the current page
-                try:
-                    if product_identifier in current_url:
-                        product_info = self.extract_product_info(current_url, mode, prod_els, log_queue, soup)
-                        if product_info:
-                            writer.writerow(product_info)
-                            product_qty += 1
+        # Find additional links to queue up for scraping
+        new_links = self.get_all_links(url, urlparse(url).netloc, log_queue, soup)
+        to_visit.update(new_links - visited)
 
-                except Exception as e:
-                    logging.error(f"Error while processing {current_url}: {e}")
-                    log_queue.put(f"Error while processing {current_url}: {e}")
-                    return None
+        # console log
+        log_queue.put(f"Visited: {len(visited)} | Queuing: {len(to_visit)} | product{"" if self.product_qty == 1 else "s"}: {self.product_qty}.")
 
-                # Find more links to visit
-                try:
-                    new_links = self.get_all_links(current_url, domain, log_queue, soup)
-                    to_visit.update(new_links - visited)
-                    log_queue.put(f"Visited: {len(visited)} | Queuing: {len(to_visit)} | product{"" if product_qty == 1 else "s"}: {product_qty}.")
-
-                except Exception as e:
-                    logging.error(f"Error extracting links from {current_url}: {e}")
-                    log_queue.put(f"Error extracting links from {current_url}: {e}")
-
-            logging.info(f"Scraping job finished.")
-            log_queue.put(f"Scraping job finished.")
-            self.stop_scraping()
 
     def extract_product_info(self, url, mode, prod_els, log_queue, soup):
         try:
@@ -251,22 +284,25 @@ class Scraper:
         parsed_url = urlparse(url)
         base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
 
+        def add_link(normalized_link):
+            if (
+                domain in normalized_link
+                and not any(blacklisted_url in normalized_link for blacklisted_url in self.adv_settings["formatted_blacklist"])
+                and not any(general_url in normalized_link for general_url in GENERAL_BLACKLIST)
+                and not normalized_link.endswith(EXCLUDED_EXTENSIONS)
+            ):
+                links.add(normalized_link)
+                # logging.info(f"Link found: {normalized_link}")
+
         try:
             # First, get all <a> tags directly (as in original code)
             for a_tag in soup.find_all("a", href=True):
                 relative_link = a_tag['href']
                 full_link = urljoin(base_url, relative_link)
                 parsed_link = urlparse(full_link)
-
                 normalized_link = urlunparse(parsed_link._replace(fragment=""))
 
-                if (
-                    domain in normalized_link 
-                    and not any(blacklisted_url in normalized_link for blacklisted_url in self.adv_settings["formatted_blacklist"]) 
-                    and not any(general_url in normalized_link for general_url in GENERAL_BLACKLIST)
-                ):
-                    links.add(normalized_link)
-                    logging.info(f"Link found: {normalized_link}")
+                add_link(normalized_link)
             
             # Look deeper into nested divs or other elements if necessary
             for div in soup.find_all(['div', 'nav', 'ul', 'li', 'span']):
@@ -276,13 +312,10 @@ class Scraper:
                     relative_link = nested_a_tag['href']
                     full_link = urljoin(base_url, relative_link)
                     parsed_link = urlparse(full_link)
-
                     normalized_link = urlunparse(parsed_link._replace(fragment=""))
-                    
-                    if domain in normalized_link and not any(blacklisted_url in normalized_link for blacklisted_url in self.adv_settings["formatted_blacklist"]):
-                        links.add(normalized_link)
-                        logging.info(f"Nested link found: {normalized_link}")
 
+                    add_link(normalized_link)
+                    
         except Exception as e:
             logging.error(f"Error while fetching links from {url}: {e}")
             log_queue.put(f"Error while fetching links from {url}: {e}")
