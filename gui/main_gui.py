@@ -122,7 +122,6 @@ class ScraperApp:
     def hide_prod_desc_field(self):
         self.product_frame.grid_forget()
 
-    # Start scraping in a separate thread
     def start_scraping(self):
         self.stop_flag.clear()
 
@@ -161,7 +160,6 @@ class ScraperApp:
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
 
-    # Stop scraping by setting a flag
     def stop_scraping(self):
         self.stop_flag.set()
         if self.scraping_thread:
@@ -171,7 +169,6 @@ class ScraperApp:
         self.stop_button.config(state=tk.DISABLED)
         self.start_button.config(state=tk.NORMAL)
 
-    # Process log queue
     def process_log_queue(self):
         # Process messages from the queue and add them to the buffer
         while not self.log_queue.empty():
