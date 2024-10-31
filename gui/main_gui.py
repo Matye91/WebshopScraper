@@ -161,14 +161,18 @@ class ScraperApp:
         self.stop_button.config(state=tk.NORMAL)
 
     def stop_scraping(self):
+        # Signal the scraper to stop
         self.stop_flag.set()
-        if self.scraping_thread:
-            self.scraping_thread.join()
-        self.scraper.stop_scraping()
-        self.log_queue.put("Scraping stopped.")
+
         self.stop_button.config(state=tk.DISABLED)
         self.start_button.config(state=tk.NORMAL)
 
+        self.log_queue.put("Scraping stopped.")
+
+        if self.scraping_thread:
+
+            self.scraper.stop_scraping()
+        
     def process_log_queue(self):
         # Process messages from the queue and add them to the buffer
         while not self.log_queue.empty():

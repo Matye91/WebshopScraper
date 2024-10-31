@@ -7,6 +7,10 @@ import os
 import csv
 import logging
 from constants import GENERAL_BLACKLIST
+from threading import Timer # for speed testing only (delete later)
+from datetime import datetime # for speed testing only (delete later)
+import psutil # for speed testing only (delete later)
+import time # for speed testing only (delete later)
 
 class Scraper:
     def __init__(self):
@@ -14,8 +18,22 @@ class Scraper:
         self.settings = {}
         self.adv_settings = {}
 
+        # for speed testing only (delete later)
+        self.average_cpu_usage = 0
+        self.max_memory_usage = 0
+
     def start_scraping(self):
         self.stop_flag.clear()
+
+        # for speed testing only (delete later)
+        now = datetime.now()
+        current_time = now.strftime("%H:%M:%S")
+        print(f"{current_time}: Timer started")
+        t = Timer(300.0, self.stop_flag.set)
+        t.start()
+        monitoring_thread = threading.Thread(target=self.monitor)
+        monitoring_thread.daemon = True
+        monitoring_thread.start()
 
         # reformat any settings to be used
         self.adv_settings["formatted_blacklist"] = self.str_to_array_by_linebrake(self.adv_settings["blacklist"])
@@ -24,6 +42,18 @@ class Scraper:
         self.scrape_task()
 
     def stop_scraping(self):
+        # for speed testing only (delete later)
+        now = datetime.now()
+        current_time = now.strftime("%H:%M:%S")
+        print(f"{current_time}: Timer stopped")
+        time.sleep(0.5)
+        
+        # Print the max CPU and memory usage
+        self.average_cpu_usage = round(self.average_cpu_usage, 1)
+        self.max_memory_usage = round(self.max_memory_usage, 0)
+        print(f"Average CPU Usage: {self.average_cpu_usage}%")
+        print(f"Max Memory Usage: {self.max_memory_usage} MB")
+
         self.stop_flag.set()
 
     def scrape_task(self):
@@ -265,3 +295,19 @@ class Scraper:
     def str_to_array_by_linebrake(self, str):
         array = [line.strip() for line in str.splitlines() if line.strip()]
         return array
+    
+    def monitor(self):
+        process = psutil.Process()
+        sample_count = 0
+        cumulative_cpu_usage = 0
+        while True:
+            # Get current CPU and memory usage
+            sample_count += 1
+            cpu_usage = process.cpu_percent(interval=0.1)
+            memory_usage = process.memory_info().rss / (1024 * 1024)  # in MB
+
+            # Update max values if the current usage exceeds previous max
+            cumulative_cpu_usage += cpu_usage
+            self.average_cpu_usage = cumulative_cpu_usage / sample_count
+            self.max_memory_usage = max(self.max_memory_usage, memory_usage)
+            time.sleep(0.1)  # Adjust the interval as needed
