@@ -154,7 +154,7 @@ class Scraper:
         if response_text is None:
             return
 
-        soup = BeautifulSoup(response_text, 'html.parser')
+        soup = BeautifulSoup(response_text, 'lxml')
 
         # If the URL contains the product identifier, extract product info
         if product_identifier in url:
