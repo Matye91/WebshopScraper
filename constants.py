@@ -1,5 +1,5 @@
 # speed test mode (runs the program for the given minutes and stops after, while also prompting the Average CPU and Max Memory Usafe)
-SPEED_TEST_MODE = True
+SPEED_TEST_MODE = False
 SPEED_TEST_DURATION = 5 * 60
 
 # set the quantity of simultaneous scraping tasks (depending on your CPU power and the target website server)

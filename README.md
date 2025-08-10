@@ -103,3 +103,7 @@ This HTML content then is send to the method `extract_product_info` (if the URL 
 `is_valid_url` is a simple method that helps the `scrape_task` method to validate the user input `start_url`.
 
 `str_to_array_by_linebrake` method converts the blacklist separated by line breaks from the GUI to an array for the `scrape_task` method.
+
+## Showcases
+
+### Used to build [garden-shop.at](https://www.garden-shop.at/)

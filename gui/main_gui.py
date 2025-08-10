@@ -12,7 +12,7 @@ import asyncio
 class ScraperApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Web Scraper")
+        self.root.title("Webshop Scraper")
 
         # Initialize Scraper object from scraper.py
         self.scraper = Scraper()
